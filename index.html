@@ -14,6 +14,7 @@
 'use strict';
 const R=7, DT=1/120, clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 function rng(seed){return()=>{seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t^=t+Math.imul(t^t>>>7,61|t);return((t^t>>>14)>>>0)/4294967296;};}
+const BASE_COUNTS=[{"holes": 0, "pins": 0}, {"holes": 0, "pins": 1}, {"holes": 0, "pins": 1}, {"holes": 1, "pins": 1}, {"holes": 1, "pins": 2}, {"holes": 1, "pins": 2}, {"holes": 3, "pins": 2}, {"holes": 2, "pins": 2}, {"holes": 2, "pins": 2}, {"holes": 3, "pins": 3}, {"holes": 3, "pins": 3}, {"holes": 3, "pins": 3}, {"holes": 4, "pins": 3}, {"holes": 3, "pins": 3}, {"holes": 1, "pins": 4}, {"holes": 6, "pins": 4}, {"holes": 6, "pins": 4}, {"holes": 5, "pins": 4}, {"holes": 6, "pins": 4}, {"holes": 7, "pins": 5}];
 const titles=Array.from({length:20},(_,i)=>`ステージ${i+1}`);
 function makeLevel(index){
  const n=index+1, cols=4+Math.floor(index/7), rows=6+Math.floor(index/8), cell=300/cols,W=340,H=rows*cell+40,ox=20,oy=20,count=cols*rows;
@@ -80,12 +81,48 @@ function makeLevel(index){
    }
   }
  }
- if(n>=11)for(let j=0;j<(n>=15?2:1);j++){const q=straight[Math.floor(straight.length*(.32+j*.32))];movers.push({x:q.c.x+q.dx*cell*.31,y:q.c.y+q.dy*cell*.31,r:5,amp:cell*.08,phase:j*2,speed:1.2+j*.3});}
+ if(n>=11)for(let j=0;j<(n>=15?2:1);j++){
+  const q=straight[Math.floor(straight.length*(.32+j*.32))];
+  movers.push({x:q.c.x,y:q.c.y,r:5,amp:cell*.30,axisX:q.dx,axisY:q.dy,phase:j*2,speed:1.3+j*.3});
+ }
  if(n>=13){const k=Math.floor(route.length*.6),a=route[k-1],b=route[k],vertical=a.x!==b.x;gates.push({x:(a.x+b.x)/2-(vertical?2:cell/2),y:(a.y+b.y)/2-(vertical?cell/2:2),w:vertical?4:cell,h:vertical?cell:4,phase:0});}
- if(n>=16){for(let k=3;k<route.length-3;k+=Math.max(5,11-(n-16))){const c=route[k],w=cell*(.65+(n-16)*.07),h=cell*(.8+(k%3)*.22);ice.push({x:c.x-w/2,y:c.y-h/2,w,h,points:[{x:c.x-w/2,y:c.y-h/2},{x:c.x+w*.25,y:c.y-h/2},{x:c.x+w/2,y:c.y-h*.15},{x:c.x+w/2,y:c.y+h/2},{x:c.x-w/2,y:c.y+h*.3}]});}}
+ if(n>=16){
+  let placed=0;
+  for(let k=2;k<route.length-2&&placed<2+Math.floor((n-16)/2);k++){
+   const a=route[k-1],c=route[k],b=route[k+1];
+   if(a.x===b.x||a.y===b.y)continue;
+   const dx=(c.x-a.x)/cell,dy=(c.y-a.y)/cell;
+   const cx=c.x-dx*cell*.25,cy=c.y-dy*cell*.25,w=cell*(dx?.95:.72),h=cell*(dy?.95:.72);
+   ice.push({x:cx-w/2,y:cy-h/2,w,h,points:[{x:cx-w/2,y:cy-h/2},{x:cx+w*.4,y:cy-h/2},{x:cx+w/2,y:cy+h*.35},{x:cx-w/2,y:cy+h/2}]});
+   holes.push({x:c.x+dx*cell*.28,y:c.y+dy*cell*.28,r:9});placed++;k++;
+  }
+ }
  // One-way penalty portal: never advances toward the goal. Exit is safe at rest;
  // an adjacent hole punishes an uncorrected tilt after the return.
  if(n>=17){const q=straight[Math.floor(straight.length*.76)],dest=straight[Math.floor(straight.length*.27)],offset=cell*.27;warps.push({x:q.c.x+q.dx*offset,y:q.c.y+q.dy*offset,r:9,to:1},{...dest.c,r:9,to:null});const near=pins.find(p=>Math.hypot(p.x-dest.c.x,p.y-dest.c.y)<cell*.45),sign=near&&((near.x-dest.c.x)*dest.dx+(near.y-dest.c.y)*dest.dy)>0?-1:1;holes.push({x:dest.c.x+dest.dx*cell*.29*sign,y:dest.c.y+dest.dy*cell*.29*sign,r:9});for(let i=holes.length-1;i>=0;i--)if(Math.hypot(holes[i].x-warps[0].x,holes[i].y-warps[0].y)<holes[i].r+warps[0].r+2)holes.splice(i,1);for(let i=pins.length-1;i>=0;i--)if(Math.hypot(pins[i].x-warps[0].x,pins[i].y-warps[0].y)<pins[i].r+warps[0].r+2)pins.splice(i,1);}
+ // Reserve the full sweep and both portal circles before filling additional hazards.
+ const reserved=p=>movers.some(m=>Math.abs((p.x-m.x)*(m.axisY||0)-(p.y-m.y)*(m.axisX||0))<p.r+m.r+10&&Math.hypot(p.x-m.x,p.y-m.y)<m.amp+p.r+m.r+10)||warps.some(w=>Math.hypot(p.x-w.x,p.y-w.y)<p.r+w.r+4);
+ for(const list of [holes,pins])for(let i=list.length-1;i>=0;i--)if(reserved(list[i]))list.splice(i,1);
+ const oldCounts=BASE_COUNTS[index];
+ const targets={pins:n===1?0:Math.ceil(oldCounts.pins*1.75),holes:n===1?0:Math.max(1,Math.ceil(oldCounts.holes*1.75))};
+ for(const [kind,radius] of [['pins',4],['holes',9]]){
+  const list=kind==='pins'?pins:holes;
+  // Prefer alternate sides of the solution, then branch entrances.
+  const candidates=[];
+  for(let k=1;k<route.length-1;k++){
+   const c=route[k];for(const sign of [-1,1])for(const axis of ['x','y']){
+    const p={x:c.x,y:c.y,r:radius};p[axis]+=sign*cell*.30;candidates.push(p);
+   }
+  }
+  for(let id=0;id<count;id++){const c=center(id);if(!route.some(q=>q.x===c.x&&q.y===c.y))candidates.push({...c,r:radius});}
+  for(const p of candidates){
+   if(list.length>=targets[kind])break;
+   if(reserved(p)||walls.some(w=>circleRect(p,p.r+2,w)))continue;
+   if([...holes,...pins].some(q=>Math.hypot(p.x-q.x,p.y-q.y)<p.r+q.r+6))continue;
+   if(route.some((a,i)=>{if(!i)return false;const b=route[i-1],dx=a.x-b.x,dy=a.y-b.y,t=clamp(((p.x-b.x)*dx+(p.y-b.y)*dy)/(dx*dx+dy*dy),0,1);return Math.hypot(p.x-b.x-t*dx,p.y-b.y-t*dy)<(kind==='pins'?R+p.r+2:p.r+2);}))continue;
+   list.push(p);
+  }
+ }
  return {index,n,title:titles[index],W,H,cols,rows,cell,walls,holes,ice,movers,gates,warps,pins,start:route[0],goal:route[route.length-1],route,edges};
 }
 function onIce(b,z){if(!z.points)return b.x>z.x&&b.x<z.x+z.w&&b.y>z.y&&b.y<z.y+z.h;let inside=false;for(let i=0,j=z.points.length-1;i<z.points.length;j=i++){const a=z.points[i],c=z.points[j];if((a.y>b.y)!==(c.y>b.y)&&b.x<(c.x-a.x)*(b.y-a.y)/(c.y-a.y)+a.x)inside=!inside;}return inside;}
@@ -93,16 +130,21 @@ function resolveCircle(b,p){const dx=b.x-p.x,dy=b.y-p.y,d=Math.hypot(dx,dy),r=R+
 function circleRect(b,r,w){const x=clamp(b.x,w.x,w.x+w.w),y=clamp(b.y,w.y,w.y+w.h);return (b.x-x)**2+(b.y-y)**2<r*r;}
 function resolveRect(b,w){let x=clamp(b.x,w.x,w.x+w.w),y=clamp(b.y,w.y,w.y+w.h),dx=b.x-x,dy=b.y-y,d=Math.hypot(dx,dy);if(d>=R)return false;if(d<1e-8){const choices=[{d:Math.abs(b.x-w.x),x:-1,y:0},{d:Math.abs(w.x+w.w-b.x),x:1,y:0},{d:Math.abs(b.y-w.y),x:0,y:-1},{d:Math.abs(w.y+w.h-b.y),x:0,y:1}].sort((a,c)=>a.d-c.d);dx=choices[0].x;dy=choices[0].y;b.x+=dx*(R+choices[0].d);b.y+=dy*(R+choices[0].d);}else{dx/=d;dy/=d;b.x+=dx*(R-d);b.y+=dy*(R-d);}const v=b.vx*dx+b.vy*dy;if(v<0){b.vx-=1.22*v*dx;b.vy-=1.22*v*dy;}return true;}
 function gateOpen(g,t){return (t+g.phase)%5>=1.6;}
-function moverAt(m,t){return{x:m.x+Math.sin(t*m.speed+m.phase)*m.amp,y:m.y,r:m.r,vx:Math.cos(t*m.speed+m.phase)*m.amp*m.speed};}
+function moverAt(m,t){
+ const offset=Math.sin(t*m.speed+m.phase)*m.amp;
+ const velocity=Math.cos(t*m.speed+m.phase)*m.amp*m.speed;
+ const dx=m.axisX??1,dy=m.axisY??0;
+ return {x:m.x+offset*dx,y:m.y+offset*dy,r:m.r,vx:velocity*dx,vy:velocity*dy};
+}
 function state(l){return{x:l.start.x,y:l.start.y,vx:0,vy:0,t:0,status:'playing',warpLock:0,gateHeld:[]};}
 function step(b,l,input,dt=DT){if(b.status!=='playing')return;const sub=Math.max(1,Math.ceil(Math.hypot(b.vx,b.vy)*dt/2));for(let k=0;k<sub;k++){
  const h=dt/sub;b.t+=h;b.warpLock=Math.max(0,b.warpLock-h);let slippery=l.ice.some(w=>onIce(b,w));const friction=slippery?.48:2.8;
  b.vx=(b.vx+clamp(input.x,-1,1)*440*h)*Math.exp(-friction*h);b.vy=(b.vy+clamp(input.y,-1,1)*440*h)*Math.exp(-friction*h);const speed=Math.hypot(b.vx,b.vy);if(speed>220){b.vx*=220/speed;b.vy*=220/speed;}b.x+=b.vx*h;b.y+=b.vy*h;
  for(let i=0;i<l.gates.length;i++){const g=l.gates[i];if(gateOpen(g,b.t))b.gateHeld[i]=false;else if(gateOpen(g,b.t-h)&&circleRect(b,R+1,g))b.gateHeld[i]=true;if(b.gateHeld[i]&&!circleRect(b,R+1,g))b.gateHeld[i]=false;}for(let pass=0;pass<2;pass++){for(const w of l.walls)resolveRect(b,w);for(let i=0;i<l.gates.length;i++)if(!gateOpen(l.gates[i],b.t)&&!b.gateHeld[i])resolveRect(b,l.gates[i]);}
  for(const p of l.pins||[])resolveCircle(b,p);
- for(const m of l.movers){const p=moverAt(m,b.t),dx=b.x-p.x,dy=b.y-p.y,d=Math.hypot(dx,dy),r=R+p.r;if(d<r){const nx=d?dx/d:0,ny=d?dy/d:1;b.x=p.x+nx*r;b.y=p.y+ny*r;const v=(b.vx-p.vx)*nx+b.vy*ny;if(v<0){b.vx-=1.25*v*nx;b.vy-=1.25*v*ny;}for(const w of l.walls)resolveRect(b,w);}}
+ for(const m of l.movers){const p=moverAt(m,b.t),dx=b.x-p.x,dy=b.y-p.y,d=Math.hypot(dx,dy),r=R+p.r;if(d<r){const nx=d?dx/d:0,ny=d?dy/d:1;b.x=p.x+nx*r;b.y=p.y+ny*r;const v=(b.vx-p.vx)*nx+(b.vy-p.vy)*ny;if(v<0){b.vx-=1.25*v*nx;b.vy-=1.25*v*ny;}for(const w of l.walls)resolveRect(b,w);}}
  for(const hole of l.holes)if(Math.hypot(b.x-hole.x,b.y-hole.y)<hole.r*.68){b.status='fallen';return;}
- if(!b.warpLock)for(const w of l.warps)if(w.to!==null&&Math.hypot(b.x-w.x,b.y-w.y)<w.r*.65){const dest=l.warps[w.to];b.x=dest.x;b.y=dest.y;b.vx*=.35;b.vy*=.35;b.warpLock=1.2;break;}
+ if(!b.warpLock)for(const w of l.warps)if(w.to!==null&&Math.hypot(b.x-w.x,b.y-w.y)<w.r*.95){const dest=l.warps[w.to];b.x=dest.x;b.y=dest.y;b.vx*=.35;b.vy*=.35;b.warpLock=1.2;break;}
  if(Math.hypot(b.x-l.goal.x,b.y-l.goal.y)<12){b.status='clear';return;}
  }}
 function tilt(beta,gamma,angle=0){const a=angle*Math.PI/180;return{x:gamma*Math.cos(a)+beta*Math.sin(a),y:beta*Math.cos(a)-gamma*Math.sin(a)};}
@@ -112,7 +154,7 @@ const api={R,DT,clamp,rng,titles,onIce,resolveCircle,makeLevel,circleRect,resolv
 </script><script>(()=>{'use strict';
 const L=Labyrinth,$=id=>document.getElementById(id),canvas=$('board'),ctx=canvas.getContext('2d'),modal=$('modal');
 const defaults={version:1,selected:0,cleared:[],best:{},sensitivity:2,sound:true,quality:'high',flipX:false,flipY:false};let saved;try{saved=JSON.parse(localStorage.getItem('tilt-labyrinth-v1')||'null');}catch{}let prefs={...defaults,...(saved&&saved.version===1?saved:{})};prefs.selected=Number.isInteger(prefs.selected)?L.clamp(prefs.selected,0,19):0;prefs.cleared=Array.isArray(prefs.cleared)?prefs.cleared.filter(n=>Number.isInteger(n)&&n>=0&&n<20):[];prefs.best=prefs.best&&typeof prefs.best==='object'?prefs.best:{};prefs.sensitivity=L.clamp(Number(prefs.sensitivity)||1,.4,2);
-if(prefs.courseVersion!==3){prefs.sensitivity=2;prefs.best={};prefs.courseVersion=3;}
+if(prefs.courseVersion!==4){prefs.sensitivity=2;prefs.best={};prefs.courseVersion=4;}
 let level=L.makeLevel(prefs.selected),ball=L.state(level),screen='title',mode='sensor',sensorReady=false,raw=null,base={x:0,y:0},filtered={x:0,y:0},lastSensor=0,listen=false,sensorWait=0,boardCache=null,dpr=1,acc=0,last=0,audio=null,toastTimer,frameCount=0;
 function save(){try{localStorage.setItem('tilt-labyrinth-v1',JSON.stringify(prefs));}catch{toast('このブラウザでは進行を保存できません');}}
 function toast(s){$('toast').textContent=s;$('toast').style.opacity=1;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').style.opacity=0,2800);}
@@ -147,7 +189,7 @@ function resize(){dpr=prefs.quality==='low'?1:Math.min(window.devicePixelRatio||
 function draw(){ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,level.W,level.H);ctx.drawImage(boardCache,0,0,level.W,level.H);const c=ctx;for(const w of level.warps){c.strokeStyle=w.to===1?'#2b859a':'#7452a7';c.lineWidth=3;c.beginPath();c.arc(w.x,w.y,w.r,0,Math.PI*2);c.stroke();c.lineWidth=1;c.beginPath();c.arc(w.x,w.y,w.r-4,0,Math.PI*2);c.stroke();c.fillStyle='#ffffffb0';c.font='8px sans-serif';c.textAlign='center';c.fillText(w.to===null?'出':'戻',w.x,w.y+3);}
  const g=level.goal;c.fillStyle='#56664d';c.beginPath();c.arc(g.x,g.y,14,0,Math.PI*2);c.fill();c.strokeStyle='#f7dca3';c.lineWidth=2;c.stroke();c.strokeStyle='#dbc28c';c.beginPath();c.arc(g.x,g.y,10,0,Math.PI*2);c.stroke();c.fillStyle='#f9e5b5';c.font='7px sans-serif';c.textAlign='center';c.fillText('GOAL',g.x,g.y+2.5);
  for(const gate of level.gates){const open=L.gateOpen(gate,ball.t)||ball.gateHeld[level.gates.indexOf(gate)];c.globalAlpha=open?.22:1;c.fillStyle='#826b3e';c.fillRect(gate.x,gate.y,gate.w,gate.h);c.fillStyle='#eed197';if(gate.w>gate.h)c.fillRect(gate.x,gate.y-2,gate.w,2);else c.fillRect(gate.x-2,gate.y,2,gate.h);c.globalAlpha=1;}
- for(const m of level.movers){const p=L.moverAt(m,ball.t);c.strokeStyle='#70583b50';c.lineWidth=2;c.beginPath();c.moveTo(m.x-m.amp,m.y);c.lineTo(m.x+m.amp,m.y);c.stroke();let grad=c.createRadialGradient(p.x-2,p.y-3,0,p.x,p.y,7);grad.addColorStop(0,'#ffe8ac');grad.addColorStop(.5,'#be914a');grad.addColorStop(1,'#6b4b23');c.fillStyle=grad;c.beginPath();c.arc(p.x,p.y,p.r,0,Math.PI*2);c.fill();}
+ for(const m of level.movers){const p=L.moverAt(m,ball.t);c.strokeStyle='#70583b50';c.lineWidth=2;c.beginPath();c.moveTo(m.x-m.amp*(m.axisX??1),m.y-m.amp*(m.axisY??0));c.lineTo(m.x+m.amp*(m.axisX??1),m.y+m.amp*(m.axisY??0));c.stroke();let grad=c.createRadialGradient(p.x-2,p.y-3,0,p.x,p.y,7);grad.addColorStop(0,'#ffe8ac');grad.addColorStop(.5,'#be914a');grad.addColorStop(1,'#6b4b23');c.fillStyle=grad;c.beginPath();c.arc(p.x,p.y,p.r,0,Math.PI*2);c.fill();}
  const x=ball.x,y=ball.y;c.save();c.shadowColor='#332a23a0';c.shadowBlur=4;c.shadowOffsetX=2;c.shadowOffsetY=4;c.fillStyle='#777';c.beginPath();c.arc(x,y,L.R,0,Math.PI*2);c.fill();c.shadowColor='transparent';let metal=c.createRadialGradient(x-2.7,y-3.2,.2,x+.7,y+1,L.R+1);metal.addColorStop(0,'#ffffff');metal.addColorStop(.18,'#eff5f1');metal.addColorStop(.4,'#a7b1ac');metal.addColorStop(.6,'#59625e');metal.addColorStop(.78,'#d2d5c5');metal.addColorStop(1,'#4d5149');c.fillStyle=metal;c.fill();c.strokeStyle='#eeefdb80';c.lineWidth=.7;c.stroke();c.restore();
 }
 function tick(now){requestAnimationFrame(tick);let dt=Math.min((now-last)/1000||0,.08);last=now;if(screen==='game'&&!document.hidden){if(mode==='sensor'&&now-lastSensor>2500&&now-sensorWait>2500){resetInput();sensorError('センサーの受信が止まったためゲームを停止しました。端末を確認して再接続してください。');return;}let target=raw?L.control(raw,base,prefs.sensitivity,prefs.flipX,prefs.flipY):{x:0,y:0};const f=1-Math.exp(-dt*14);filtered.x+=(target.x-filtered.x)*f;filtered.y+=(target.y-filtered.y)*f;acc+=dt;while(acc>=L.DT){L.step(ball,level,filtered);acc-=L.DT;if(ball.status!=='playing'){finish();acc=0;break;}}$('time').textContent=format(ball.t);}if((screen==='game'||frameCount===0)&&(prefs.quality!=='low'||frameCount%2===0))draw();frameCount++;}
