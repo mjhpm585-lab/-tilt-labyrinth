@@ -17,29 +17,76 @@ function rng(seed){return()=>{seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(see
 const titles=Array.from({length:20},(_,i)=>`ステージ${i+1}`);
 function makeLevel(index){
  const n=index+1, cols=4+Math.floor(index/7), rows=6+Math.floor(index/8), cell=300/cols,W=340,H=rows*cell+40,ox=20,oy=20,count=cols*rows;
- // A Hamiltonian corridor visits every cell. Alternate orientation and reflection.
- const path=[]; const horizontal=n%2===1;
- if(horizontal){for(let y=0;y<rows;y++)for(let k=0;k<cols;k++)path.push(y*cols+(y%2?cols-1-k:k));}
- else {for(let x=0;x<cols;x++)for(let k=0;k<rows;k++)path.push((x%2?rows-1-k:k)*cols+x);}
- if(n%4>=2)for(let k=0;k<path.length;k++){const id=path[k];path[k]=Math.floor(id/cols)*cols+cols-1-id%cols;}
- const edges=Array.from({length:count},()=>[]);for(let k=1;k<count;k++){edges[path[k-1]].push(path[k]);edges[path[k]].push(path[k-1]);}
+ // Select a seeded branching maze whose solution visits approximately 70% of cells.
+ let path,edges;
+ for(let attempt=0;attempt<2000;attempt++){
+  const random=rng(31000+n*2003+attempt*71);
+  const candidate=Array.from({length:count},()=>[]);
+  const start=n%4===0?cols-1:0,visited=new Set([start]),stack=[start],parent=Array(count).fill(-1);
+  parent[start]=start;
+  while(stack.length){
+   const current=stack[stack.length-1],x=current%cols,y=Math.floor(current/cols);
+   const choices=[];
+   if(x>0&&!visited.has(current-1))choices.push(current-1);
+   if(x<cols-1&&!visited.has(current+1))choices.push(current+1);
+   if(y>0&&!visited.has(current-cols))choices.push(current-cols);
+   if(y<rows-1&&!visited.has(current+cols))choices.push(current+cols);
+   if(!choices.length){stack.pop();continue;}
+   const next=choices[Math.floor(random()*choices.length)];
+   candidate[current].push(next);candidate[next].push(current);
+   parent[next]=current;visited.add(next);stack.push(next);
+  }
+  const branches=candidate.filter(e=>e.length>=3).length;
+  if(branches<3)continue;
+  let best=null;
+  for(let goal=0;goal<count;goal++){
+   if(goal===start||candidate[goal].length!==1)continue;
+   const solution=[goal];while(solution[0]!==start)solution.unshift(parent[solution[0]]);
+   const fraction=solution.length/count;
+   if(fraction<.65||fraction>.75)continue;
+   if(!best||Math.abs(fraction-.7)<Math.abs(best.length/count-.7))best=solution;
+  }
+  if(best&&best.slice(1,-1).filter((id,i)=>{const a=best[i],b=best[i+2];return a%cols===b%cols||Math.floor(a/cols)===Math.floor(b/cols);}).length>=5){path=best;edges=candidate;break;}
+ }
+ if(!path)throw new Error('No valid branching maze for stage '+n);
  const center=id=>({x:ox+(id%cols+.5)*cell,y:oy+(Math.floor(id/cols)+.5)*cell});
  const route=path.map(center),walls=[{x:16,y:16,w:308,h:4},{x:16,y:H-20,w:308,h:4},{x:16,y:20,w:4,h:H-40},{x:320,y:20,w:4,h:H-40}];
  for(let a=0;a<count;a++){let x=a%cols,y=Math.floor(a/cols);if(x<cols-1&&!edges[a].includes(a+1))walls.push({x:ox+(x+1)*cell-2,y:oy+y*cell-2,w:4,h:cell+4});if(y<rows-1&&!edges[a].includes(a+cols))walls.push({x:ox+x*cell-2,y:oy+(y+1)*cell-2,w:cell+4,h:4});}
  const holes=[],ice=[],movers=[],gates=[],warps=[],pins=[];
  // Hazards occupy straight runs, leaving radius-aware space at every corner.
- const straight=[];for(let k=2;k<count-2;k++){const a=route[k-1],c=route[k],b=route[k+1];if(a.x===b.x||a.y===b.y)straight.push({k,c,dx:a.y===b.y?0:1,dy:a.x===b.x?0:1});}
- const pinCount=n===1?0:Math.min(straight.length,1+Math.floor(n*1.15));
- for(let j=0;j<pinCount;j++){const q=straight[Math.floor(j*straight.length/pinCount)],sign=j%2?1:-1,offset=19-Math.min(n,20)*.32;pins.push({x:q.c.x+q.dx*offset*sign,y:q.c.y+q.dy*offset*sign,r:4});}
- const holeCount=n<4?0:Math.min(straight.length,1+Math.floor((n-4)*1.1));
- for(let j=0;j<holeCount;j++){const q=straight[Math.floor(j*straight.length/holeCount)],near=pins.find(p=>Math.hypot(p.x-q.c.x,p.y-q.c.y)<cell*.45),sign=near?((near.x-q.c.x)*q.dx+(near.y-q.c.y)*q.dy>0?-1:1):(j%2?-1:1),offset=Math.min(cell*.28,22-(n-4)*.36);holes.push({x:q.c.x+q.dx*offset*sign,y:q.c.y+q.dy*offset*sign,r:9+Math.min(2,(n-4)*.1)});}
+ const straight=[];for(let k=2;k<route.length-2;k++){const a=route[k-1],c=route[k],b=route[k+1];if(a.x===b.x||a.y===b.y)straight.push({k,c,dx:a.y===b.y?0:1,dy:a.x===b.x?0:1});}
+ // Alternate pin steering, braking zones and empty recovery stretches.
+ const pinCount=n===1?0:Math.min(straight.length,1+Math.floor(n/5));
+ const occupied=new Set();
+ for(let j=0;j<pinCount;j++){
+  const slot=Math.min(straight.length-1,Math.floor((j+.5)*straight.length/pinCount));
+  const q=straight[slot],sign=(j+n)%2?1:-1,offset=cell*(n%3===0?.3:.25);
+  pins.push({x:q.c.x+q.dx*offset*sign,y:q.c.y+q.dy*offset*sign,r:4});
+  occupied.add(q.k);
+ }
+ const hazardCells=straight.filter(q=>!occupied.has(q.k));
+ const holeCount=n<4?0:Math.min(hazardCells.length,1+Math.floor((n-4)/3));
+ for(let j=0;j<holeCount;j++){
+  const q=hazardCells[Math.floor((j+.5)*hazardCells.length/holeCount)];
+  const sign=(j+n)%2?1:-1;
+  holes.push({x:q.c.x+q.dx*cell*.27*sign,y:q.c.y+q.dy*cell*.27*sign,r:9});
+ }
+ // Some stages place a hole beyond a turn: excess speed carries the ball outward.
+ if(n>=7&&n%3===1){
+  for(let k=2;k<route.length-2;k++){
+   const a=route[k-1],c=route[k],b=route[k+1];
+   if(a.x!==b.x&&a.y!==b.y){
+    holes.push({x:c.x+(c.x-a.x)*.27,y:c.y+(c.y-a.y)*.27,r:8});break;
+   }
+  }
+ }
  if(n>=11)for(let j=0;j<(n>=15?2:1);j++){const q=straight[Math.floor(straight.length*(.32+j*.32))];movers.push({x:q.c.x+q.dx*cell*.31,y:q.c.y+q.dy*cell*.31,r:5,amp:cell*.08,phase:j*2,speed:1.2+j*.3});}
- if(n>=13){const k=Math.floor(count*.6),a=route[k-1],b=route[k],vertical=a.x!==b.x;gates.push({x:(a.x+b.x)/2-(vertical?2:cell/2),y:(a.y+b.y)/2-(vertical?cell/2:2),w:vertical?4:cell,h:vertical?cell:4,phase:0});}
- if(n>=16){for(let k=3;k<count-3;k+=Math.max(3,8-(n-16))){const c=route[k],w=cell*(.65+(n-16)*.07),h=cell*(.8+(k%3)*.22);ice.push({x:c.x-w/2,y:c.y-h/2,w,h,points:[{x:c.x-w/2,y:c.y-h/2},{x:c.x+w*.25,y:c.y-h/2},{x:c.x+w/2,y:c.y-h*.15},{x:c.x+w/2,y:c.y+h/2},{x:c.x-w/2,y:c.y+h*.3}]});}}
+ if(n>=13){const k=Math.floor(route.length*.6),a=route[k-1],b=route[k],vertical=a.x!==b.x;gates.push({x:(a.x+b.x)/2-(vertical?2:cell/2),y:(a.y+b.y)/2-(vertical?cell/2:2),w:vertical?4:cell,h:vertical?cell:4,phase:0});}
+ if(n>=16){for(let k=3;k<route.length-3;k+=Math.max(5,11-(n-16))){const c=route[k],w=cell*(.65+(n-16)*.07),h=cell*(.8+(k%3)*.22);ice.push({x:c.x-w/2,y:c.y-h/2,w,h,points:[{x:c.x-w/2,y:c.y-h/2},{x:c.x+w*.25,y:c.y-h/2},{x:c.x+w/2,y:c.y-h*.15},{x:c.x+w/2,y:c.y+h/2},{x:c.x-w/2,y:c.y+h*.3}]});}}
  // One-way penalty portal: never advances toward the goal. Exit is safe at rest;
  // an adjacent hole punishes an uncorrected tilt after the return.
  if(n>=17){const q=straight[Math.floor(straight.length*.76)],dest=straight[Math.floor(straight.length*.27)],offset=cell*.27;warps.push({x:q.c.x+q.dx*offset,y:q.c.y+q.dy*offset,r:9,to:1},{...dest.c,r:9,to:null});const near=pins.find(p=>Math.hypot(p.x-dest.c.x,p.y-dest.c.y)<cell*.45),sign=near&&((near.x-dest.c.x)*dest.dx+(near.y-dest.c.y)*dest.dy)>0?-1:1;holes.push({x:dest.c.x+dest.dx*cell*.29*sign,y:dest.c.y+dest.dy*cell*.29*sign,r:9});for(let i=holes.length-1;i>=0;i--)if(Math.hypot(holes[i].x-warps[0].x,holes[i].y-warps[0].y)<holes[i].r+warps[0].r+2)holes.splice(i,1);for(let i=pins.length-1;i>=0;i--)if(Math.hypot(pins[i].x-warps[0].x,pins[i].y-warps[0].y)<pins[i].r+warps[0].r+2)pins.splice(i,1);}
- return {index,n,title:titles[index],W,H,cols,rows,cell,walls,holes,ice,movers,gates,warps,pins,start:route[0],goal:route[count-1],route,edges};
+ return {index,n,title:titles[index],W,H,cols,rows,cell,walls,holes,ice,movers,gates,warps,pins,start:route[0],goal:route[route.length-1],route,edges};
 }
 function onIce(b,z){if(!z.points)return b.x>z.x&&b.x<z.x+z.w&&b.y>z.y&&b.y<z.y+z.h;let inside=false;for(let i=0,j=z.points.length-1;i<z.points.length;j=i++){const a=z.points[i],c=z.points[j];if((a.y>b.y)!==(c.y>b.y)&&b.x<(c.x-a.x)*(b.y-a.y)/(c.y-a.y)+a.x)inside=!inside;}return inside;}
 function resolveCircle(b,p){const dx=b.x-p.x,dy=b.y-p.y,d=Math.hypot(dx,dy),r=R+p.r;if(d>=r)return false;const nx=d?dx/d:0,ny=d?dy/d:1;b.x=p.x+nx*r;b.y=p.y+ny*r;const v=b.vx*nx+b.vy*ny;if(v<0){b.vx-=1.22*v*nx;b.vy-=1.22*v*ny;}return true;}
@@ -65,7 +112,7 @@ const api={R,DT,clamp,rng,titles,onIce,resolveCircle,makeLevel,circleRect,resolv
 </script><script>(()=>{'use strict';
 const L=Labyrinth,$=id=>document.getElementById(id),canvas=$('board'),ctx=canvas.getContext('2d'),modal=$('modal');
 const defaults={version:1,selected:0,cleared:[],best:{},sensitivity:2,sound:true,quality:'high',flipX:false,flipY:false};let saved;try{saved=JSON.parse(localStorage.getItem('tilt-labyrinth-v1')||'null');}catch{}let prefs={...defaults,...(saved&&saved.version===1?saved:{})};prefs.selected=Number.isInteger(prefs.selected)?L.clamp(prefs.selected,0,19):0;prefs.cleared=Array.isArray(prefs.cleared)?prefs.cleared.filter(n=>Number.isInteger(n)&&n>=0&&n<20):[];prefs.best=prefs.best&&typeof prefs.best==='object'?prefs.best:{};prefs.sensitivity=L.clamp(Number(prefs.sensitivity)||1,.4,2);
-if(prefs.courseVersion!==2){prefs.sensitivity=2;prefs.best={};prefs.courseVersion=2;}
+if(prefs.courseVersion!==3){prefs.sensitivity=2;prefs.best={};prefs.courseVersion=3;}
 let level=L.makeLevel(prefs.selected),ball=L.state(level),screen='title',mode='sensor',sensorReady=false,raw=null,base={x:0,y:0},filtered={x:0,y:0},lastSensor=0,listen=false,sensorWait=0,boardCache=null,dpr=1,acc=0,last=0,audio=null,toastTimer,frameCount=0;
 function save(){try{localStorage.setItem('tilt-labyrinth-v1',JSON.stringify(prefs));}catch{toast('このブラウザでは進行を保存できません');}}
 function toast(s){$('toast').textContent=s;$('toast').style.opacity=1;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').style.opacity=0,2800);}
